@@ -1,5 +1,7 @@
 
 import 'dart:async';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter/material.dart';
 import 'robot_link.dart';
 
@@ -28,16 +30,49 @@ class _DashboardState extends State<Dashboard> {
   StreamSubscription<String>? incoming;
   int tab=0;
   bool busy=false;
+  final stt.SpeechToText speech = stt.SpeechToText();
+  final FlutterTts tts = FlutterTts();
+  bool listening=false;
+  String robotState='idle';
+  bool speakReplies=true;
+  Future<void> listen() async {
+    if(listening){await speech.stop();if(mounted)setState(()=>listening=false);return;}
+    final ok=await speech.initialize(onError:(e){if(mounted){setState(()=>listening=false);_notice('الميكروفون: $e');}},
+      onStatus:(status){if(mounted&&status=='done')setState(()=>listening=false);});
+    if(!ok){_notice('التعرف على الكلام غير متاح على الجهاز');return;}
+    if(link.connected) await link.sendState('listening');
+    setState((){listening=true;face='curious';robotState='listening';});
+    await speech.listen(localeId:'ar_EG',onResult:(r){
+      if(mounted){setState(()=>chat.text=r.recognizedWords);}
+      if(r.finalResult){setState(()=>listening=false);_chat();}
+    });
+  }
+  Future<void> readAloud(String text) async {
+    if(!speakReplies)return;
+    await tts.setLanguage('ar-EG');
+    await tts.setSpeechRate(.48);
+    await tts.speak(text);
+  }
+
   final List<(bool,String)> messages=[(false,'أهلاً! أنا Celyah 💜 اتصلي بيا عشان نبدأ مغامرتنا.')];
   String face='normal';
   @override void initState(){super.initState();link.addListener(_refresh);
-    incoming=link.lines.listen((line){if(mounted)setState(()=>messages.add((false,line)));});}
+    incoming=link.lines.listen((line){if(!mounted)return;
+      setState((){messages.add((false,line));face='happy';robotState='speaking';});
+      if(!line.startsWith('BAT:')) readAloud(line);
+    });}
   void _refresh(){if(mounted)setState((){});}
   Future<void> command(String cmd) async {
     if(!link.connected){_notice('وصّلي الروبوت بالبلوتوث الأول');return;}
     try{await link.send(cmd);_notice('تم إرسال الأمر: $cmd');}
     catch(e){_notice('فشل إرسال الأمر: $e');}
   }
+  Widget _brand()=>Row(mainAxisSize:MainAxisSize.min,children:[
+    const Text('Celyah',style:TextStyle(fontSize:31,fontWeight:FontWeight.w800,letterSpacing:-1.8)),
+    const Text('♡',style:TextStyle(color:lavender,fontSize:29)),
+    const SizedBox(width:9),
+    const Text('R O B O T',style:TextStyle(color:soft,fontSize:9,letterSpacing:1.2))
+  ]);
   void _notice(String s){if(mounted)ScaffoldMessenger.of(context).showSnackBar(SnackBar(content:Text(s)));}
   Future<void> _chat() async {
     final s=chat.text.trim();if(s.isEmpty)return;
@@ -45,7 +80,7 @@ class _DashboardState extends State<Dashboard> {
     if(!link.connected){setState(()=>messages.add((false,'الروبوت غير متصل. اتصلي به أولاً.')));return;}
     try{await link.send(s);}catch(e){setState(()=>messages.add((false,'تعذّر الإرسال: $e')));}
   }
-  @override void dispose(){incoming?.cancel();link.removeListener(_refresh);link.dispose();chat.dispose();camera.dispose();super.dispose();}
+  @override void dispose(){speech.cancel();tts.stop();incoming?.cancel();link.removeListener(_refresh);link.dispose();chat.dispose();camera.dispose();super.dispose();}
   Widget _card(Widget child,{EdgeInsets? pad})=>Container(
     padding:pad??const EdgeInsets.all(20),decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(26),
       border:Border.all(color:lavender.withValues(alpha:.12))),child:child);
@@ -58,9 +93,7 @@ class _DashboardState extends State<Dashboard> {
     const SizedBox(height:5),Text(subtitle,style:const TextStyle(color:soft)),const SizedBox(height:20)]);
   @override Widget build(BuildContext context)=>Scaffold(
     appBar:AppBar(backgroundColor:bg,toolbarHeight:76,
-      title:Row(children:[const Text('Celyah',style:TextStyle(fontSize:29,fontWeight:FontWeight.w700,letterSpacing:-1.6)),
-      const Text('♡',style:TextStyle(color:lavender,fontSize:25)),const SizedBox(width:8),
-      const Text('ROBOT',style:TextStyle(fontSize:10,letterSpacing:3,color:soft))]),
+      title:_brand(),
       actions:[Padding(padding:const EdgeInsets.only(right:16),child:Icon(link.connected?Icons.bluetooth_connected:Icons.bluetooth_disabled,
         color:link.connected?lavender:soft))]),
     body:SafeArea(child:IndexedStack(index:tab,children:[_home(),_messages(),_vision(),_control(),_settings()])),
@@ -75,11 +108,13 @@ class _DashboardState extends State<Dashboard> {
       ]));
   Widget _home()=>ListView(padding:const EdgeInsets.all(18),children:[
     _card(Column(children:[
-      Container(width:190,height:175,decoration:BoxDecoration(color:Colors.black,borderRadius:BorderRadius.circular(36),
+      Container(width:260,height:235,decoration:BoxDecoration(color:Colors.black,borderRadius:BorderRadius.circular(36),
         border:Border.all(color:lavender.withValues(alpha:.45),width:2),
         boxShadow:[BoxShadow(color:lavender.withValues(alpha:.12),blurRadius:30)]),
         child:CustomPaint(painter:EyePainter(face))),
       const SizedBox(height:20),
+      const Text('Hi! I’m Celyah ♡',style:TextStyle(fontSize:23,fontWeight:FontWeight.w700)),
+      const SizedBox(height:5),
       const Text('Your little companion with a big heart',textAlign:TextAlign.center,
         style:TextStyle(color:soft,fontSize:13)),
       const SizedBox(height:18),
@@ -92,6 +127,14 @@ class _DashboardState extends State<Dashboard> {
         ()async{if(link.connected){await link.disconnect();}else{await link.connect();}},primary:true)
     ])),
     const SizedBox(height:18),
+    Row(children:[
+      Expanded(child:_quickTile('Talk',Icons.mic,()=>setState(()=>tab=1))),
+      const SizedBox(width:8),
+      Expanded(child:_quickTile('Vision',Icons.visibility_outlined,()=>setState(()=>tab=2))),
+      const SizedBox(width:8),
+      Expanded(child:_quickTile('Control',Icons.gamepad_outlined,()=>setState(()=>tab=3))),
+    ]),
+    const SizedBox(height:22),
     _title('شخصية Celyah','اختاري إحساسها وشوفي عيونها بتتغير'),
     Wrap(spacing:8,runSpacing:8,children:[
       for(final f in [('normal','عادي'),('happy','سعيدة'),('love','حب'),('curious','فضولية'),('sleepy','نعسانة'),('angry','غضبانة')])
@@ -105,7 +148,22 @@ class _DashboardState extends State<Dashboard> {
         'لا تشغّلي الحركة الذاتية قبل اختبار الأمان.',style:TextStyle(color:soft))
     ])),
   ]);
+  Widget _quickTile(String label,IconData icon,VoidCallback action)=>InkWell(
+    onTap:action,borderRadius:BorderRadius.circular(20),
+    child:Container(padding:const EdgeInsets.symmetric(vertical:18,horizontal:5),
+      decoration:BoxDecoration(color:panel,borderRadius:BorderRadius.circular(20)),
+      child:Column(children:[Icon(icon,color:lavender,size:27),const SizedBox(height:8),Text(label)])));
   Widget _messages()=>Column(children:[
+    Padding(padding:const EdgeInsets.fromLTRB(18,8,18,4),
+      child:Row(children:[
+        Container(width:55,height:55,decoration:BoxDecoration(color:Colors.black,borderRadius:BorderRadius.circular(16)),
+          child:CustomPaint(painter:EyePainter(face))),
+        const SizedBox(width:12),
+        Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
+          const Text('Celyah ♡',style:TextStyle(fontWeight:FontWeight.bold,fontSize:18)),
+          Text(listening?'بتسمعك دلوقتي...':robotState=='speaking'?'بترد عليك...':'جاهزة للكلام',
+            style:const TextStyle(color:soft,fontSize:12))]),
+      ])),
     Expanded(child:ListView.builder(reverse:true,padding:const EdgeInsets.all(18),itemCount:messages.length,
       itemBuilder:(context,i){final m=messages[messages.length-1-i];
         return Align(alignment:m.$1?Alignment.centerRight:Alignment.centerLeft,
@@ -116,11 +174,21 @@ class _DashboardState extends State<Dashboard> {
     Padding(padding:const EdgeInsets.all(12),child:Row(children:[
       Expanded(child:TextField(controller:chat,onSubmitted:(_)=>_chat(),textInputAction:TextInputAction.send,
         decoration:const InputDecoration(hintText:'اكتبي رسالة لـ Celyah...'))),
-      const SizedBox(width:8),IconButton.filled(onPressed:_chat,icon:const Icon(Icons.send))
+      const SizedBox(width:5),
+      IconButton.filledTonal(onPressed:listen,icon:Icon(listening?Icons.stop:Icons.mic,color:lavender)),
+      IconButton.filled(onPressed:_chat,icon:const Icon(Icons.send))
     ]))
   ]);
   Widget _vision()=>ListView(padding:const EdgeInsets.all(18),children:[
-    _title('عيون Celyah','ربط بث الكاميرا عبر Wi-Fi'),
+    _title('Celyah Vision','عيون Celyah — رؤية العالم حولها'),
+    Container(height:215,decoration:BoxDecoration(color:Colors.black,borderRadius:BorderRadius.circular(24),
+      border:Border.all(color:lavender.withValues(alpha:.35))),
+      child:const Column(mainAxisAlignment:MainAxisAlignment.center,children:[
+        Icon(Icons.videocam_off_outlined,color:lavender,size:52),
+        SizedBox(height:12),Text('LIVE VIEW • OFFLINE',style:TextStyle(color:soft,letterSpacing:2)),
+        SizedBox(height:6),Text('بانتظار بث الكاميرا من الروبوت',style:TextStyle(color:soft))
+      ])),
+    const SizedBox(height:18),
     _card(Column(crossAxisAlignment:CrossAxisAlignment.start,children:[
       const Icon(Icons.videocam_outlined,color:lavender,size:42),
       const SizedBox(height:14),
@@ -138,7 +206,7 @@ class _DashboardState extends State<Dashboard> {
       'لا تختبري الحركة قرب سلالم أو حواف مكشوفة.',style:TextStyle(color:soft)))
   ]);
   Widget _control()=>ListView(padding:const EdgeInsets.all(18),children:[
-    _title('التحكم','أوامر آمنة ومتوافقة مع وظائف V7 الحالية'),
+    _title('Celyah Control','لوحة التحكم في الحركة والتعبيرات'),
     _card(Column(children:[
       const Icon(Icons.pan_tool_alt_outlined,color:lavender,size:38),
       const SizedBox(height:10),
@@ -166,6 +234,9 @@ class _DashboardState extends State<Dashboard> {
       const Divider(height:32),
       const Text('Gemini',style:TextStyle(fontSize:18,fontWeight:FontWeight.bold)),
       const SizedBox(height:8),
+      SwitchListTile(contentPadding:EdgeInsets.zero,title:const Text('قراءة ردود الروبوت بصوت'),
+        subtitle:const Text('استخدام تحويل النص إلى كلام على الموبايل',style:TextStyle(color:soft)),
+        value:speakReplies,onChanged:(v)=>setState(()=>speakReplies=v)),
       const Text('هذه النسخة ترسل الرسائل إلى firmware عبر BLE. '
         'لا تحفظ مفاتيح API داخل التطبيق أو الكود. أضف إدارة آمنة للمفتاح في مرحلة التكامل.',
         style:TextStyle(color:soft)),
